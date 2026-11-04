@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Тестовая доска — распознавание позиции</title>
+<style>
+  body { font: 14px/1.5 "Segoe UI", system-ui, sans-serif; background: #14161a; color: #e8eaed;
+         margin: 0; padding: 24px 32px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.note { color: #8b95a3; margin: 0 0 18px; max-width: 760px; }
+  .layout { display: flex; gap: 24px; align-items: flex-start; }
+  .clocks { width: 240px; }
+  .clock { background: #1c2027; border-radius: 8px; padding: 10px 14px; margin-bottom: 10px;
+           display: flex; justify-content: space-between; color: #9aa4b2; }
+  .clock.clock-player-turn { background: #2b6f4b; color: #eafff3; }
+  .controls { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+  button { background: #262b33; color: #e8eaed; border: 0; border-radius: 6px;
+           padding: 7px 12px; font: inherit; cursor: pointer; }
+  button:hover { background: #333a45; }
+  code { color: #8bd498; }
+  /* --- имитация разметки chess.com --- */
+  wc-chess-board { display: block; position: relative; width: 480px; height: 480px; }
+  wc-chess-board .board { position: absolute; inset: 0; }
+  wc-chess-board .square { position: absolute; width: 12.5%; height: 12.5%; }
+  wc-chess-board .square.light { background: #eeeed2; }
+  wc-chess-board .square.dark { background: #769656; }
+  wc-chess-board .piece { position: absolute; width: 12.5%; height: 12.5%;
+                          display: flex; align-items: center; justify-content: center;
+                          font-size: 42px; line-height: 1; user-select: none; }
+  wc-chess-board .coordinate { position: absolute; font: 700 11px/1 "Segoe UI", sans-serif;
+                               color: #3b4a2f; }
+  #fen-out { margin-top: 14px; color: #8b95a3; font-family: Consolas, monospace; font-size: 12px;
+             word-break: break-all; max-width: 480px; }
+</style>
+</head>
+<body>
+<h1>Тестовая доска</h1>
+<p class="note">Страница повторяет разметку chess.com (<code>wc-chess-board</code>, <code>.piece</code> с классами
+  <code>wp</code>, <code>square-52</code>). Скрипт тренера запущен прямо здесь: он должен прочитать позицию,
+  отправить её движку и нарисовать стрелку лучшего хода.</p>
+
+<div class="layout">
+  <wc-chess-board id="board-single" class="board">
+    <div class="board"></div>
+  </wc-chess-board>
+
+  <div class="clocks">
+    <div class="clock clock-top"><span>Соперник</span><span>5:00</span></div>
+    <div class="clock clock-bottom"><span>Вы</span><span>5:00</span></div>
+    <div class="controls">
+      <button id="next">Следующий ход</button>
+      <button id="flip">Перевернуть доску</button>
+      <button id="reset">С начала</button>
+      <label style="display:flex;align-items:center;gap:6px;color:#8b95a3">
+        <input type="checkbox" id="auto"> авто-ходы
+      </label>
+    </div>
+    <div id="fen-out"></div>
+  </div>
+</div>
+
+<script>
+const GLYPH = {
+  wp: '♙', wn: '♘', wb: '♗', wr: '♖', wq: '♕', wk: '♔',
+  bp: '♟', bn: '♞', bb: '♝', br: '♜', bq: '♛', bk: '♚',
+};
+
+const LINE = [
+  'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w',
+  'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b',
+  'rnbqkbnr/pppp1ppp/8/4p3/8/8/PPPPPPPP/RNBQKBNR w',
+  'rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR b',
+  'r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w',
+  'r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b',
+  'r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w',
+];
+
+const boardEl = document.querySelector('wc-chess-board');
+const inner = boardEl.querySelector('.board');
+const fenOut = document.getElementById('fen-out');
+const clockTop = document.querySelector('.clock-top');
+const clockBottom = document.querySelector('.clock-bottom');
+
+let index = 0;
+let flipped = false;
+let auto = null;
+
+function parsePlacement(placement) {
+  const map = {};
+  placement.split('/').forEach((row, rowIndex) => {
+    let file = 0;
+    for (const ch of row) {
+      if (/\d/.test(ch)) { file += Number(ch); continue; }
+      const rank = 8 - rowIndex;            // 1..8
+      map[String.fromCharCode(97 + file) + rank] = (ch === ch.toUpperCase() ? 'w' : 'b') + ch.toLowerCase();
+      file += 1;
+    }
+  });
+  return map;
+}
+
+function render() {
+  const [placement, turn] = LINE[index].split(' ');
+  inner.innerHTML = '';
+
+  for (let row = 0; row < 8; row += 1) {
+    for (let file = 0; file < 8; file += 1) {
+      const square = document.createElement('div');
+      square.className = 'square ' + ((row + file) % 2 === 0 ? 'light' : 'dark');
+      square.style.left = file * 12.5 + '%';
+      square.style.top = row * 12.5 + '%';
+      inner.appendChild(square);
+    }
+  }
+
+  const pieces = parsePlacement(placement);
+  for (const square in pieces) {
+    const file = square.charCodeAt(0) - 97;
+    const rank = Number(square[1]) - 1;
+    // chess.com нумерует поля визуально: 11 = левое верхнее
+    const col = flipped ? 7 - file : file;
+    const row = flipped ? rank : 7 - rank;
+    const el = document.createElement('div');
+    el.className = 'piece ' + pieces[square] + ' square-' + (col + 1) + (row + 1);
+    el.style.left = col * 12.5 + '%';
+    el.style.top = row * 12.5 + '%';
+    el.style.color = pieces[square][0] === 'w' ? '#fff' : '#222';
+    el.textContent = GLYPH[pieces[square]];
+    inner.appendChild(el);
+  }
+
+  // подписи вертикалей/горизонталей, как на chess.com
+  for (let i = 0; i < 8; i += 1) {
+    const label = document.createElement('div');
+    label.className = 'coordinate';
+    label.style.left = '2px';
+    label.style.top = i * 12.5 + 2 + '%';
+    label.textContent = String(flipped ? i + 1 : 8 - i);
+    inner.appendChild(label);
+  }
+
+  boardEl.classList.toggle('flipped', flipped);
+  clockBottom.classList.toggle('clock-player-turn', turn === 'w');
+  clockTop.classList.toggle('clock-player-turn', turn === 'b');
+  fenOut.textContent = LINE[index] + '  (доска ' + (flipped ? 'чёрными' : 'белыми') + ' снизу)';
+}
+
+document.getElementById('next').addEventListener('click', () => {
+  index = (index + 1) % LINE.length;
+  render();
+});
+document.getElementById('reset').addEventListener('click', () => {
+  index = 0;
+  render();
+});
+document.getElementById('flip').addEventListener('click', () => {
+  flipped = !flipped;
+  render();
+});
+document.getElementById('auto').addEventListener('change', (event) => {
+  if (event.target.checked) auto = setInterval(() => { index = (index + 1) % LINE.length; render(); }, 2500);
+  else { clearInterval(auto); auto = null; }
+});
+
+render();
+</script>
+<script src="/userscript/chess-coach.user.js"></script>
+</body>
+</html>
